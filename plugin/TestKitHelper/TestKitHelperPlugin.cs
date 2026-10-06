@@ -1,0 +1,39 @@
+using System;
+using LabApi.Events.Handlers;
+using LabApi.Loader.Features.Plugins;
+
+namespace CarlModTestKit
+{
+    /// <summary>
+    /// Local test helper for Carl Mod servers: mirrors console output into the Unity log (the file console
+    /// never returns command text), spawns server-side dummy players and lists/moves players.
+    /// For local test servers only: the "testkit" command has no permission check.
+    /// </summary>
+    public sealed class TestKitHelperPlugin : Plugin
+    {
+        public override string Name => "TestKitHelper";
+
+        public override string Description => "Carl Mod local test helper: console mirror, dummy players, player list.";
+
+        public override string Author => "carlmod-testkit";
+
+        public override Version Version => new Version(1, 0, 0);
+
+        public override Version RequiredApiVersion => new Version(1, 0, 0);
+
+        public override void Enable()
+        {
+            ConsoleMirror.Attach();
+            // ServerConsole replaces its output list after plugins are enabled, so attach again later.
+            ServerEvents.WaitingForPlayers += ConsoleMirror.Attach;
+            ServerEvents.RoundStarted += ConsoleMirror.Attach;
+        }
+
+        public override void Disable()
+        {
+            ServerEvents.WaitingForPlayers -= ConsoleMirror.Attach;
+            ServerEvents.RoundStarted -= ConsoleMirror.Attach;
+            ConsoleMirror.Detach();
+        }
+    }
+}

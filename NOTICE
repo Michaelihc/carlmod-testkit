@@ -1,0 +1,17 @@
+carlmod-testkit
+Copyright (c) 2026 Michaelihc. Licensed under the MIT License (see LICENSE).
+
+本项目与 SCP: Secret Laboratory（Northwood Studios）及 Carl Mod 均无关联，也未获得其认可或授权。
+本仓库不包含任何游戏文件：没有服务端、客户端 APK、游戏程序集或反编译代码。
+使用者需自行从 Carl Mod 官方渠道获取服务端和客户端。
+
+This project is not affiliated with, endorsed by, or sponsored by SCP: Secret Laboratory
+(Northwood Studios) or Carl Mod. No game files are included: no server, client APK, game
+assemblies or decompiled code. Obtain the server and client from official Carl Mod channels.
+
+"SCP: Secret Laboratory" is a trademark of its respective owner. SCP Foundation content is
+licensed under CC BY-SA 3.0.
+
+The optional TestKitHelper plugin (plugin/TestKitHelper) is built against, but does not include,
+LabAPI-Mobile (https://github.com/Michaelihc/labapimobile, LGPL-3.0) and the game assemblies of
+the user's own Carl Mod server.

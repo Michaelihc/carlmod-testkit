@@ -1,0 +1,35 @@
+# Everything the scripts generate: server copies, APK copies, logs, captures, downloads, state
+.runtime/
+
+# Local configuration
+testkit.config.psd1
+
+# Game files supplied by the user (never commit them)
+inputs/*
+!inputs/README.txt
+*.apk
+*.apk.*
+*.zip
+*.xapk
+*.obb
+Carl Mod.exe
+Carl Mod_Data/
+
+# Android SDK / emulator downloads and images
+cmdline-tools/
+platform-tools/
+system-images/
+*.avd/
+*.img
+*.qcow2
+
+# Logs and captures
+*.log
+*.png
+*.json.tmp
+
+# Build output
+bin/
+obj/
+*.dll
+*.pdb

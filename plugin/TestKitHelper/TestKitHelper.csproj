@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    TestKitHelper：本地测试辅助插件（LabAPI-Mobile 插件）。只用于本地测试服务器。
+    推荐用 scripts\Install-HelperPlugin.ps1 构建和安装，它会自动传入下面两个路径：
+      CarlManaged  Carl Mod 服务端的 "Carl Mod_Data\Managed" 文件夹（默认 .runtime\server-original 中的）
+      LabApiDll    LabAPI-Mobile 的 LabApi.dll
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>TestKitHelper</AssemblyName>
+    <RootNamespace>CarlModTestKit</RootNamespace>
+    <Version>1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CarlManaged Condition="'$(CarlManaged)' == ''">$(MSBuildThisFileDirectory)..\..\.runtime\server-original\Carl Mod_Data\Managed</CarlManaged>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="LabApi" HintPath="$(LabApiDll)" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(CarlManaged)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="CommandSystem.Core" HintPath="$(CarlManaged)\CommandSystem.Core.dll" Private="false" />
+    <Reference Include="Mirror" HintPath="$(CarlManaged)\Mirror.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(CarlManaged)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="mscorlib" HintPath="$(CarlManaged)\mscorlib.dll" Private="false" />
+    <Reference Include="System" HintPath="$(CarlManaged)\System.dll" Private="false" />
+    <Reference Include="System.Core" HintPath="$(CarlManaged)\System.Core.dll" Private="false" />
+    <Reference Include="netstandard" HintPath="$(CarlManaged)\netstandard.dll" Private="false" />
+  </ItemGroup>
+
+  <Target Name="CheckReferencePaths" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(CarlManaged)\Assembly-CSharp.dll')" Text="找不到 $(CarlManaged)\Assembly-CSharp.dll。先导入服务端（setup.cmd），或用 -p:CarlManaged=&lt;服务端\Carl Mod_Data\Managed&gt; 指定。" />
+    <Error Condition="'$(LabApiDll)' == '' Or !Exists('$(LabApiDll)')" Text="找不到 LabApi.dll。先运行 scripts\Install-LabApiMobile.ps1，或用 -p:LabApiDll=&lt;LabApi.dll 路径&gt; 指定。" />
+  </Target>
+</Project>
