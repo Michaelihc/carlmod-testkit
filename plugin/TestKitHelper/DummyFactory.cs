@@ -9,9 +9,12 @@ using UnityEngine;
 namespace CarlModTestKit
 {
     /// <summary>
-    /// Server-side dummy players (no phone needed). Same steps as the fork's ServerDummy.Spawn, except that
-    /// NicknameSync.Start runs before the nickname is set: the fork sets the nickname while NicknameSync's hub
-    /// reference is still null, so ServerDummy.Spawn throws a NullReferenceException in NicknameSync.SetNick.
+    /// Server-side dummy players (no phone needed).
+    /// Carl Mod 0.0.5 fixed the game's ServerDummy.Spawn (NicknameSync.Awake sets the hub reference), so it is used
+    /// there. On 0.0.4, ServerDummy.Spawn sets the nickname while NicknameSync's hub reference is still null and throws a
+    /// NullReferenceException in NicknameSync.SetNick; the same steps run here with NicknameSync.Start called first.
+    /// The builds are told apart by their members, and members that only one build has are bound by reflection
+    /// (a missing member breaks the JIT of the method that references it).
     /// </summary>
     internal static class DummyFactory
     {
@@ -19,11 +22,49 @@ namespace CarlModTestKit
 
         private static readonly FieldInfo HubField = typeof(ServerDummy).GetField("_hub", Any);
         private static readonly FieldInfo ConnectionField = typeof(ServerDummy).GetField("_connection", Any);
-        private static readonly MethodInfo NicknameStart = typeof(NicknameSync).GetMethod("Start", Any);
+        private static readonly MethodInfo NicknameStart = typeof(NicknameSync).GetMethod("Start", Any | BindingFlags.DeclaredOnly);
+
+        /// <summary>True when the game's own ServerDummy.Spawn works (Carl Mod 0.0.5: NicknameSync declares Awake).</summary>
+        public static readonly bool NativeSpawn = typeof(NicknameSync).GetMethod("Awake", Any | BindingFlags.DeclaredOnly) != null;
+
+        /// <summary>True when players are identified by device ID (Carl Mod 0.0.5: CharacterClassManager.DeviceId, equal to UserId).</summary>
+        public static readonly bool DeviceIds = typeof(CharacterClassManager).GetProperty("DeviceId", Any) != null;
+
+        public static string SpawnMode => NativeSpawn
+            ? "game ServerDummy.Spawn"
+            : "ServerDummy.Spawn steps with NicknameSync.Start first (Carl Mod 0.0.4 workaround)";
 
         /// <param name="position">World position, or null to use the role's spawnpoint.</param>
         /// <param name="yaw">Horizontal view angle in degrees (only used with a position).</param>
-        public static ReferenceHub Spawn(RoleTypeId role, Vector3? position, float yaw)
+        public static ReferenceHub Spawn(RoleTypeId role, Vector3? position, float yaw) =>
+            NativeSpawn ? SpawnNative(role, position, yaw) : SpawnWithWorkaround(role, position, yaw);
+
+        private static ReferenceHub SpawnNative(RoleTypeId role, Vector3? position, float yaw)
+        {
+            // The game's Spawn always places the dummy at the given position, so pick the role's spawnpoint first.
+            Vector3 at = Vector3.zero;
+            if (position.HasValue)
+                at = position.Value;
+            else if (TryGetSpawnpoint(role, out Vector3 spawnpoint, out float spawnYaw))
+            {
+                at = spawnpoint;
+                yaw = spawnYaw;
+            }
+
+            return ServerDummy.Spawn(role, at, Quaternion.Euler(0f, yaw, 0f));
+        }
+
+        private static bool TryGetSpawnpoint(RoleTypeId role, out Vector3 position, out float yaw)
+        {
+            position = Vector3.zero;
+            yaw = 0f;
+            return PlayerRoleLoader.TryGetRoleTemplate(role, out PlayerRoleBase template)
+                && template is IFpcRole fpc
+                && fpc.SpawnpointHandler != null
+                && fpc.SpawnpointHandler.TryGetSpawnpoint(out position, out yaw);
+        }
+
+        private static ReferenceHub SpawnWithWorkaround(RoleTypeId role, Vector3? position, float yaw)
         {
             if (!NetworkServer.active || NetworkManager.singleton == null || NetworkManager.singleton.playerPrefab == null)
                 throw new InvalidOperationException("The server player prefab is unavailable.");

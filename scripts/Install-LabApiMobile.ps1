@@ -5,19 +5,23 @@
 .DESCRIPTION
   - 从 https://github.com/Michaelihc/labapimobile 的最新发布版下载框架压缩包（或用 -Zip 指定本地压缩包），
     解压到 .runtime\labapi\。
-  - 对测试服务器 .runtime\server-<端口> 运行 LabApiMobile.Installer.exe。原始服务端不会被修改。
+  - 对测试服务器 .runtime\server-<端口>-<版本> 运行 LabApiMobile.Installer.exe。原始服务端不会被修改。
     安装器会把原来的 Assembly-CSharp.dll 备份为 Assembly-CSharp.dll.labapi-original。
+    每个服务端版本的测试服务器是分开的，换版本后要再安装一次。
+    支持 Carl Mod 0.0.4（官方版和死斗模块版）和 0.0.5；0.0.5 需要 LabAPI-Mobile 1.1.7-mobile.5 或更新版本。
   - 创建插件文件夹 <服务器>\AppData\SCP Secret Laboratory\LabAPI-Mobile\plugins\global\，
     把插件 DLL 放进去，重启服务器即可加载。
   服务器必须先停止。
 
-.PARAMETER Port     测试服务器端口，默认取配置 Port。
-.PARAMETER Zip      本地的 LabAPI-Mobile 发布压缩包（不联网时使用）。
-.PARAMETER Version  发布版标签（例如 v1.1.7-mobile.2），默认最新版。
+.PARAMETER Port           测试服务器端口，默认取配置 Port。
+.PARAMETER ServerVersion  服务端版本（导入了多个版本时使用），默认取配置 ServerVersion。
+.PARAMETER Zip            本地的 LabAPI-Mobile 发布压缩包（不联网时使用）。
+.PARAMETER Version        LabAPI-Mobile 发布版标签（例如 v1.1.7-mobile.5），默认最新版。
 #>
 [CmdletBinding()]
 param(
     [int]$Port,
+    [string]$ServerVersion,
     [string]$Zip,
     [string]$Version
 )
@@ -31,7 +35,8 @@ if (-not $Port) { $Port = [int](Get-KitConfig).Port }
 if (Get-RunningServer $Port) {
     Fail "端口 $Port 的测试服务器正在运行。安装 LabAPI-Mobile 前必须先停止它。" "运行 scripts\Stop-TestServer.ps1 -Port $Port，安装完再启动。"
 }
-$serverDir = Initialize-TestServerDir (Get-ServerDir $Port)
+$build = Select-PristineServer $ServerVersion
+$serverDir = Initialize-TestServerDir (Get-ServerDir $Port $build) $build
 
 $labRoot = Join-Path $script:Runtime 'labapi'
 New-Item -ItemType Directory -Force $labRoot | Out-Null
@@ -59,9 +64,9 @@ Expand-Archive -LiteralPath $Zip -DestinationPath $extract -Force
 $installer = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'LabApiMobile.Installer.exe' | Select-Object -First 1
 if (-not $installer) { Fail '压缩包里没有 LabApiMobile.Installer.exe。' '确认下载的是 LabAPI-Mobile 的发布压缩包。' }
 
-Write-Step "安装 LabAPI-Mobile 到 $serverDir"
+Write-Step "安装 LabAPI-Mobile 到 $serverDir（服务端 $($build.Label)）"
 & $installer.FullName $serverDir
-if ($LASTEXITCODE -ne 0) { Fail "安装器失败（退出码 $LASTEXITCODE）。" '查看上面的输出。安装器只支持它认识的 Carl Mod 服务端版本。' }
+if ($LASTEXITCODE -ne 0) { Fail "安装器失败（退出码 $LASTEXITCODE）。" '查看上面的输出。安装器只支持它认识的 Carl Mod 服务端版本；Carl Mod 0.0.5 需要 LabAPI-Mobile 1.1.7-mobile.5 或更新版本（去掉 -Version / -Zip 即使用最新版）。' }
 
 $plugins = Join-Path (Get-LabApiDataDir $serverDir) 'plugins\global'
 New-Item -ItemType Directory -Force $plugins | Out-Null

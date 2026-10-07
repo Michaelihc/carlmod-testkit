@@ -3,8 +3,9 @@
   启动本地 Carl Mod 测试服务器，等它开始监听后返回。
 
 .DESCRIPTION
-  - 测试服务器文件夹是 .runtime\server-<端口>。不存在时从原始服务端（.runtime\server-original
-    或配置里的 ServerFolder）复制一份；原始服务端本身从不修改。
+  - 测试服务器文件夹是 .runtime\server-<端口>-<版本>（例如 server-7777-0.0.5）。不存在时从该版本的原始服务端
+    （.runtime\server-original-<版本>，或配置里的 ServerFolder）复制一份；原始服务端本身从不修改。
+    导入了多个版本时，版本由 -ServerVersion 或配置 ServerVersion 决定（见 Import-Server.ps1）。
   - 写入 hoster_policy.txt（gamedir_for_configs: true），配置、封禁列表和日志都放在
     <服务器文件夹>\AppData，而不是真正的 %APPDATA%\SCP Secret Laboratory。唯一的例外是服务端的
     player-prefs 文件 %APPDATA%\SCP Secret Laboratory\registry.txt：服务端在读取该策略之前就确定了它的路径，
@@ -19,7 +20,8 @@
     Stop-TestServer.ps1 只按这个 PID 停止。
 
 .PARAMETER Port            游戏端口（UDP），默认取配置 Port（7777）。
-.PARAMETER ServerDir       测试服务器文件夹，默认 .runtime\server-<端口>。
+.PARAMETER ServerVersion   服务端版本（如 0.0.5、0.0.4、0.0.4-dm），默认取配置 ServerVersion，见上。
+.PARAMETER ServerDir       测试服务器文件夹，默认 .runtime\server-<端口>-<版本>。
 .PARAMETER LogPath         Unity 日志路径，默认 .runtime\logs\server-<端口>-<时间>.log。
 .PARAMETER TimeoutSec      等待启动的秒数（默认 180）。
 .PARAMETER Stdout          用 -stdout 输出到 <日志>.stdout.txt，而不是文件控制台（之后不能发送命令）。
@@ -28,11 +30,13 @@
 
 .EXAMPLE
   .\scripts\Start-TestServer.ps1
+  .\scripts\Start-TestServer.ps1 -ServerVersion 0.0.4
   .\scripts\Start-TestServer.ps1 -Port 7778 -ConfigOverrides @{ afk_time = '0'; friendly_fire = 'true' }
 #>
 [CmdletBinding()]
 param(
     [int]$Port,
+    [string]$ServerVersion,
     [string]$ServerDir,
     [string]$LogPath,
     [int]$TimeoutSec = 180,
@@ -50,12 +54,16 @@ $session = $cfg.CommandSession
 
 $running = Get-RunningServer $Port
 if ($running) {
-    Write-Ok "端口 $Port 的测试服务器已在运行（PID $($running.Pid)）。"
+    Write-Ok "端口 $Port 的测试服务器已在运行（PID $($running.Pid)$(if ($running.Build) { "，服务端 $($running.Build)" })）。"
     Write-Host "日志：$($running.LogPath)"
+    if ($ServerVersion -and $ServerVersion -notin @($running.Version, $running.Key)) { Write-Note "要换成 $ServerVersion 的服务端，先停止它：scripts\Stop-TestServer.ps1 -Port $Port。" }
     return
 }
 
-if (-not $ServerDir) { $ServerDir = Get-ServerDir $Port }
+$build = $null
+if ($ServerDir -and (Test-Path -LiteralPath (Join-Path $ServerDir 'Carl Mod.exe'))) { $build = Get-ServerDirBuild $ServerDir }
+if (-not $build) { $build = Select-PristineServer $ServerVersion }
+if (-not $ServerDir) { $ServerDir = Get-ServerDir $Port $build }
 if (-not $LogPath)   { $LogPath = Join-Path $script:Runtime ('logs\server-{0}-{1:yyyyMMdd-HHmmss}.log' -f $Port, (Get-Date)) }
 $ServerDir = [IO.Path]::GetFullPath($ServerDir)
 $LogPath   = [IO.Path]::GetFullPath($LogPath)
@@ -65,7 +73,7 @@ if (Test-UdpPortInUse $Port) {
     Fail "UDP 端口 $Port 已被其它程序占用（可能是另一个服务端或其它游戏服务器）。" "关掉占用它的程序，或换一个端口：在 testkit.config.psd1 里改 Port，或运行时加 -Port 7778。"
 }
 
-$null = Initialize-TestServerDir $ServerDir
+$null = Initialize-TestServerDir $ServerDir $build
 
 $stateDir = Join-Path $script:Runtime 'state'
 New-Item -ItemType Directory -Force $stateDir | Out-Null
@@ -85,6 +93,7 @@ function Test-LogContains([string]$Path, [string]$Pattern) {
 function Save-State([int]$ProcessId, [string]$Log, [bool]$FileConsole) {
     $state = [ordered]@{
         Pid = $ProcessId; Port = $Port; ServerDir = $ServerDir; LogPath = $Log
+        Version = $build.Version; Key = $build.Key; Build = $build.Label
         Session = $(if ($FileConsole) { $session } else { '' }); Started = (Get-Date).ToString('s')
     }
     Write-Utf8NoBom $stateFile @(([pscustomobject]$state | ConvertTo-Json))
@@ -144,10 +153,10 @@ if ($ConfigOverrides.Count -gt 0 -and -not (Test-Path -LiteralPath $configFile))
 }
 if ($ConfigOverrides.Count -gt 0) { Set-ConfigValues $configFile $ConfigOverrides }
 
-Write-Step "启动测试服务器（UDP 端口 $Port，约 35 秒）"
+Write-Step "启动测试服务器（服务端 $($build.Label)，UDP 端口 $Port，约 35 秒）"
 $proc = Start-ServerProcess $LogPath (-not $Stdout)
-Write-Ok "测试服务器已就绪：UDP 端口 $Port，PID $($proc.Id)"
+Write-Ok "测试服务器已就绪：服务端 $($build.Label)，UDP 端口 $Port，PID $($proc.Id)"
 Write-Host "日志：     $LogPath"
 Write-Host "AppData：  $(Join-Path $ServerDir 'AppData')"
-Write-Host "模拟器里连接地址：10.0.2.2:$Port"
+Write-Host "模拟器里连接地址：10.0.2.2:$Port$(if ($build.Version) { "（客户端也必须是 $($build.Version) 版本）" })"
 if ($Stdout) { Write-Note '-Stdout 模式不能发送控制台命令。' }

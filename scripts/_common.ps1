@@ -24,11 +24,17 @@ function Write-Utf8NoBom([string]$Path, [string[]]$Lines) {
 
 # ---------------------------------------------------------------- 配置
 
+function Resolve-KitPath([string]$Path) {
+    if ([IO.Path]::IsPathRooted($Path)) { return $Path }
+    return (Join-Path $script:KitRoot $Path)
+}
+
 # 默认值；testkit.config.psd1（可选，从 testkit.config.example.psd1 复制）中的同名键会覆盖它们。
 function Get-KitConfig {
     if ($script:KitConfigCache) { return $script:KitConfigCache }
     $cfg = @{
         Port                 = 7777
+        ServerVersion        = ''
         ServerZip            = ''
         ServerFolder         = ''
         Apk                  = ''
@@ -58,9 +64,12 @@ function Get-KitConfig {
             $cfg[$k] = $user[$k]
         }
     }
-    foreach ($k in 'ServerZip', 'ServerFolder', 'Apk', 'AndroidSdk') {
-        if ($cfg[$k] -and -not [IO.Path]::IsPathRooted($cfg[$k])) { $cfg[$k] = Join-Path $script:KitRoot $cfg[$k] }
+    # ServerZip 可以是一个或多个路径。相对路径以本工具所在文件夹为起点。
+    $cfg.ServerZip = @(@($cfg.ServerZip) | Where-Object { $_ } | ForEach-Object { Resolve-KitPath $_ })
+    foreach ($k in 'ServerFolder', 'Apk', 'AndroidSdk') {
+        if ($cfg[$k]) { $cfg[$k] = Resolve-KitPath $cfg[$k] }
     }
+    $cfg.ServerVersion = "$($cfg.ServerVersion)".Trim()
     $script:KitConfigCache = $cfg
     return $cfg
 }
@@ -85,37 +94,248 @@ function Find-InputFile([string]$ConfigKey, [string[]]$Patterns, [string]$What) 
     return $null
 }
 
-function Find-ServerZip { Find-InputFile 'ServerZip' @('*.zip') '服务端 ZIP' }
-function Find-ApkFile   { Find-InputFile 'Apk' @('*.apk', '*.apk.*') '客户端 APK' }
+function Find-ApkFile { Find-InputFile 'Apk' @('*.apk', '*.apk.*') '客户端 APK' }
 
-# 原始服务端文件夹（只读，测试服务器从它复制）：配置的 ServerFolder，否则 .runtime\server-original。
-function Get-PristineServerDir {
+# 服务端 ZIP 列表：配置的 ServerZip（一个或多个），否则 inputs 文件夹里的全部 *.zip（每个版本一个）。
+function Find-ServerZips {
     $cfg = Get-KitConfig
-    if ($cfg.ServerFolder) { return [IO.Path]::GetFullPath($cfg.ServerFolder) }
-    return (Join-Path $script:Runtime 'server-original')
+    if ($cfg.ServerZip) {
+        return @(foreach ($z in $cfg.ServerZip) {
+            if (-not (Test-Path -LiteralPath $z -PathType Leaf)) {
+                Fail "testkit.config.psd1 中 ServerZip 指向的服务端 ZIP 不存在：$z" '改正路径，或删掉这一项并把 ZIP 放进 inputs 文件夹。'
+            }
+            (Resolve-Path -LiteralPath $z).ProviderPath
+        })
+    }
+    $inputs = Join-Path $script:KitRoot 'inputs'
+    return @(Get-ChildItem -LiteralPath $inputs -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -ieq '.zip' } | Sort-Object Name | ForEach-Object FullName)
 }
 
-function Assert-PristineServer {
-    $dir = Get-PristineServerDir
-    if (-not (Test-Path -LiteralPath (Join-Path $dir 'Carl Mod.exe'))) {
-        if ((Get-KitConfig).ServerFolder) {
-            Fail "ServerFolder 指向的文件夹里没有 Carl Mod.exe：$dir" '把 ServerFolder 改成包含 Carl Mod.exe 的文件夹。'
+# ---------------------------------------------------------------- 服务端版本 / 客户端版本
+
+if (-not $global:CarlModTestKitVersionCache) { $global:CarlModTestKitVersionCache = @{} }
+
+# 按文件路径、大小和修改时间缓存计算结果（菜单里反复显示版本时不重复读取文件）。
+function Get-CachedValue([IO.FileInfo]$CacheFile, [scriptblock]$Compute) {
+    $key = '{0}|{1}|{2}' -f $CacheFile.FullName, $CacheFile.Length, $CacheFile.LastWriteTimeUtc.Ticks
+    if (-not $global:CarlModTestKitVersionCache.ContainsKey($key)) { $global:CarlModTestKitVersionCache[$key] = & $Compute }
+    return $global:CarlModTestKitVersionCache[$key]
+}
+
+function Open-ZipArchive([string]$Path) {
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    return [IO.Compression.ZipFile]::OpenRead($Path)
+}
+
+function Read-ZipEntryBytes($Entry) {
+    $ms = New-Object IO.MemoryStream
+    $s = $Entry.Open()
+    try { $s.CopyTo($ms) } finally { $s.Dispose() }
+    return ,$ms.ToArray()
+}
+
+# 从 Assembly-CSharp.dll 的内容识别服务端版本。版本取自 GameCore.Version 静态构造函数里赋给 VersionString 的字符串
+# （只读取 IL，不运行游戏代码）；Assembly-CSharp 里有死斗模块的成员（PlayerStats.DmCleanup）时是 0.0.4 的死斗模块版。
+# 返回 Version（如 0.0.5，读不到为 $null）、Deathmatch、Key（文件夹名和 ServerVersion 用，如 0.0.5、0.0.4-dm）、Label（显示用）。
+function Get-ServerBuildInfo([byte[]]$AssemblyBytes) {
+    $version = $null
+    try {
+        $type = [Reflection.Assembly]::Load($AssemblyBytes).GetType('GameCore.Version', $false)
+        $field = if ($type) { $type.GetField('VersionString') }
+        $il = if ($field -and $type.TypeInitializer) { $type.TypeInitializer.GetMethodBody().GetILAsByteArray() }
+        for ($i = 0; $il -and $i -le $il.Length - 10; $i++) {
+            # ldstr <字符串> 后面紧跟 stsfld VersionString
+            if ($il[$i] -eq 0x72 -and $il[$i + 5] -eq 0x80 -and [BitConverter]::ToInt32($il, $i + 6) -eq $field.MetadataToken) {
+                $version = $type.Module.ResolveString([BitConverter]::ToInt32($il, $i + 1))
+                break
+            }
         }
+    } catch { $version = $null }
+    if ($version -notmatch '^[\w.\-]+$') { $version = $null }
+    $dm = $false
+    if ($AssemblyBytes.Length -gt 0) { $dm = [Text.Encoding]::GetEncoding(28591).GetString($AssemblyBytes).Contains("`0DmCleanup`0") }
+    $key = if (-not $version) { 'unknown' } elseif ($dm) { "$version-dm" } else { $version }
+    $label = if (-not $version) { '未知版本' } elseif ($dm) { "$version 死斗模块版" } else { $version }
+    return [pscustomobject]@{ Version = $version; Deathmatch = $dm; Key = $key; Label = $label }
+}
+
+# 服务端文件夹（含 Carl Mod.exe）的版本；不是服务端文件夹时返回 $null。
+function Get-ServerDirBuild([string]$ServerDir) {
+    $file = Get-Item -LiteralPath (Join-Path $ServerDir 'Carl Mod_Data\Managed\Assembly-CSharp.dll') -ErrorAction SilentlyContinue
+    if (-not $file) { return $null }
+    return (Get-CachedValue $file { Get-ServerBuildInfo ([IO.File]::ReadAllBytes($file.FullName)) })
+}
+
+# 服务端 ZIP 的版本（只读取 ZIP 里的 Assembly-CSharp.dll，不解压）；ZIP 里没有 Carl Mod.exe 时返回 $null。
+# 条目名可能用反斜杠分隔，也可能有一层顶层文件夹（如 “Carl Mod Server - 0.0.5\”）。
+function Get-ZipServerBuild([string]$Zip) {
+    $file = Get-Item -LiteralPath $Zip
+    return (Get-CachedValue $file {
+        $archive = Open-ZipArchive $file.FullName
+        try {
+            $entries = @{}
+            foreach ($e in $archive.Entries) { $entries[$e.FullName.Replace('\', '/')] = $e }
+            $exe = @($entries.Keys | Where-Object { $_ -eq 'Carl Mod.exe' -or $_.EndsWith('/Carl Mod.exe') } | Sort-Object Length)
+            if ($exe.Count -eq 0) { return $null }
+            $root = $exe[0].Substring(0, $exe[0].Length - 'Carl Mod.exe'.Length)
+            $dll = $entries["${root}Carl Mod_Data/Managed/Assembly-CSharp.dll"]
+            if (-not $dll) { return (Get-ServerBuildInfo ([byte[]]@())) }
+            return (Get-ServerBuildInfo (Read-ZipEntryBytes $dll))
+        } finally { $archive.Dispose() }
+    })
+}
+
+# 读取二进制 AndroidManifest.xml 中 manifest 元素的 android:versionName（字符串值）；读不到返回 $null。
+function Read-ManifestVersionName([byte[]]$b) {
+    $pool = 8
+    if ($b.Length -lt 36 -or [BitConverter]::ToUInt16($b, $pool) -ne 1) { return $null }
+    $poolHeader = [BitConverter]::ToUInt16($b, $pool + 2)
+    $count = [BitConverter]::ToInt32($b, $pool + 8)
+    $utf8 = ([BitConverter]::ToUInt32($b, $pool + 16) -band 0x100) -ne 0
+    $stringsStart = $pool + [BitConverter]::ToInt32($b, $pool + 20)
+    $getString = {
+        param([int]$Index)
+        if ($Index -lt 0 -or $Index -ge $count) { return $null }
+        $p = $stringsStart + [BitConverter]::ToInt32($b, $pool + $poolHeader + 4 * $Index)
+        if ($utf8) {
+            $p += $(if ($b[$p] -band 0x80) { 2 } else { 1 })
+            $n = [int]$b[$p]
+            if ($n -band 0x80) { $n = (($n -band 0x7F) -shl 8) -bor $b[$p + 1]; $p += 2 } else { $p += 1 }
+            return [Text.Encoding]::UTF8.GetString($b, $p, $n)
+        }
+        $n = [int][BitConverter]::ToUInt16($b, $p); $p += 2
+        if ($n -band 0x8000) { $n = (($n -band 0x7FFF) -shl 16) -bor [BitConverter]::ToUInt16($b, $p); $p += 2 }
+        return [Text.Encoding]::Unicode.GetString($b, $p, 2 * $n)
+    }
+    $pos = $pool + [BitConverter]::ToInt32($b, $pool + 4)
+    while ($pos + 30 -le $b.Length) {
+        $size = [BitConverter]::ToInt32($b, $pos + 4)
+        if ($size -le 0) { return $null }
+        if ([BitConverter]::ToUInt16($b, $pos) -eq 0x0102) {
+            # 第一个元素就是 manifest：属性从 $pos + 16 + attributeStart 开始，每个 attributeSize 字节。
+            $attrStart = [BitConverter]::ToUInt16($b, $pos + 24)
+            $attrSize = [BitConverter]::ToUInt16($b, $pos + 26)
+            $attrCount = [BitConverter]::ToUInt16($b, $pos + 28)
+            for ($k = 0; $k -lt $attrCount; $k++) {
+                $a = $pos + 16 + $attrStart + $k * $attrSize
+                if ((& $getString ([BitConverter]::ToInt32($b, $a + 4))) -eq 'versionName') {
+                    return (& $getString ([BitConverter]::ToInt32($b, $a + 8)))
+                }
+            }
+            return $null
+        }
+        $pos += $size
+    }
+    return $null
+}
+
+# APK 的版本（AndroidManifest.xml 的 versionName，读不到时取文件名里的 x.y.z），都没有时返回 $null。
+function Get-ApkVersion([string]$Apk) {
+    $file = Get-Item -LiteralPath $Apk
+    return (Get-CachedValue $file {
+        $v = $null
+        try {
+            $archive = Open-ZipArchive $file.FullName
+            try {
+                $entry = $archive.GetEntry('AndroidManifest.xml')
+                if ($entry) { $v = Read-ManifestVersionName (Read-ZipEntryBytes $entry) }
+            } finally { $archive.Dispose() }
+        } catch { $v = $null }
+        if (-not $v -and $file.Name -match '(\d+\.\d+\.\d+)') { $v = $Matches[1] }
+        $v
+    })
+}
+
+# inputs 里（或配置的）APK 的路径和版本；找不到或出错时返回 $null，不抛错。
+function Get-ApkInfo {
+    try {
+        $apk = Find-ApkFile
+        if ($apk) { return [pscustomobject]@{ Path = $apk; Version = (Get-ApkVersion $apk) } }
+    } catch { }
+    return $null
+}
+
+# 模拟器里已安装的客户端版本（versionName），读不到返回 $null。
+function Get-InstalledClientVersion([string]$Serial) {
+    foreach ($line in (Invoke-Adb $Serial shell dumpsys package $script:ClientPackage)) {
+        if ($line -match 'versionName=(\S+)') { return $Matches[1] }
+    }
+    return $null
+}
+
+$script:VersionMatchNote = '客户端和服务端的版本必须相同，否则服务器会以版本不符拒绝连接（例如 0.0.4 的客户端不能加入 0.0.5 的服务器）。'
+
+# ---------------------------------------------------------------- 原始服务端（每个版本一个）
+
+# 可用的原始服务端（只读，测试服务器从它们复制），按版本排序。来源依次为：配置的 ServerFolder、
+# Import-Server.ps1 解压的 .runtime\server-original-<版本>、旧版本工具解压的 .runtime\server-original。
+# 同一版本只取第一个。
+function Get-PristineServers {
+    $cfg = Get-KitConfig
+    $dirs = New-Object System.Collections.Generic.List[string]
+    if ($cfg.ServerFolder) { $dirs.Add([IO.Path]::GetFullPath($cfg.ServerFolder)) }
+    $found = @(Get-ChildItem -LiteralPath $script:Runtime -Directory -Filter 'server-original*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^server-original(-.+)?$' } | Sort-Object { $_.Name -eq 'server-original' }, Name)
+    foreach ($d in $found) { $dirs.Add($d.FullName) }
+    $list = @()
+    foreach ($dir in $dirs) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dir 'Carl Mod.exe'))) { continue }
+        $b = Get-ServerDirBuild $dir
+        if (-not $b) { $b = Get-ServerBuildInfo ([byte[]]@()) }
+        if ($list | Where-Object { $_.Key -eq $b.Key }) { continue }
+        $list += [pscustomobject]@{
+            Key = $b.Key; Label = $b.Label; Version = $b.Version; Deathmatch = $b.Deathmatch; Dir = $dir
+            FromConfig = [bool]($cfg.ServerFolder -and $dir -eq [IO.Path]::GetFullPath($cfg.ServerFolder))
+        }
+    }
+    return @($list | Sort-Object { try { [version]$_.Version } catch { [version]'0.0' } }, Key)
+}
+
+# 选出要使用的原始服务端：参数 -ServerVersion，否则配置 ServerVersion；都没有时，只有一个版本就用它，
+# 有多个版本时用和客户端 APK 版本相同的那个。可以写版本号（0.0.5）或文件夹用的键（0.0.4-dm）。
+function Select-PristineServer([string]$ServerVersion) {
+    $cfg = Get-KitConfig
+    $all = @(Get-PristineServers)
+    if ($all.Count -eq 0) {
+        if ($cfg.ServerFolder) { Fail "ServerFolder 指向的文件夹里没有 Carl Mod.exe：$($cfg.ServerFolder)" '把 ServerFolder 改成包含 Carl Mod.exe 的文件夹。' }
         Fail '还没有导入服务端。' '把 Carl Mod 服务端 ZIP 放进 inputs 文件夹，然后运行 setup.cmd（或 scripts\Import-Server.ps1）。'
     }
-    return $dir
+    $names = ($all | ForEach-Object Label) -join '、'
+    $want = if ($ServerVersion) { $ServerVersion.Trim() } else { $cfg.ServerVersion }
+    if ($want) {
+        $hit = @($all | Where-Object { $_.Key -eq $want })
+        if ($hit.Count -eq 0) { $hit = @($all | Where-Object { $_.Version -eq $want }) }
+        if ($hit.Count -eq 1) { return $hit[0] }
+        if ($hit.Count -gt 1) { Fail "有多个 $want 版本的服务端：$names。" "改用 $(($hit | ForEach-Object Key) -join ' 或 ') 指定。" }
+        Fail "没有 $want 版本的服务端（已导入：$names）。" '把该版本的服务端 ZIP 放进 inputs 文件夹后运行 scripts\Import-Server.ps1，或把 ServerVersion 改成已导入的版本。'
+    }
+    if ($all.Count -eq 1) { return $all[0] }
+    $apk = Get-ApkInfo
+    if ($apk -and $apk.Version) {
+        $hit = @($all | Where-Object { $_.Version -eq $apk.Version })
+        if ($hit.Count -eq 1) { return $hit[0] }
+    }
+    $last = $all[$all.Count - 1].Key
+    Fail "已导入多个版本的服务端（$names），没有指定使用哪一个。" "在 testkit.config.psd1 里设置 ServerVersion（例如 ServerVersion = '$last'），或运行脚本时加 -ServerVersion $last。"
 }
 
 # ---------------------------------------------------------------- 测试服务器
 
-function Get-ServerDir([int]$Port) { Join-Path $script:Runtime "server-$Port" }
+# 测试服务器文件夹：每个端口、每个服务端版本一个（.runtime\server-<端口>-<版本>），切换版本时互不影响。
+function Get-ServerDir([int]$Port, $Build) { Join-Path $script:Runtime "server-$Port-$($Build.Key)" }
 function Get-ServerStateFile([int]$Port) { Join-Path $script:Runtime "state\server-$Port.json" }
+
+# 读取状态文件（无 BOM 的 UTF-8；路径里可能有中文，Windows PowerShell 5.1 的 Get-Content 会读错）。
+function Read-StateFile([string]$File) {
+    return ([IO.File]::ReadAllText($File, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+}
 
 # 返回本工具为该端口启动、且仍在运行的服务端进程信息；没有则返回 $null。
 function Get-RunningServer([int]$Port) {
     $file = Get-ServerStateFile $Port
     if (-not (Test-Path -LiteralPath $file)) { return $null }
-    $state = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+    $state = Read-StateFile $file
     $info = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$state.Pid)" -ErrorAction SilentlyContinue
     if (-not $info -or -not (Test-IsTestServerProcess $info $Port)) { return $null }
     return $state
@@ -125,15 +345,15 @@ function Test-IsTestServerProcess($Info, [int]$Port) {
     return ($Info.Name -eq 'Carl Mod.exe' -and $Info.CommandLine -match "-port$Port(\s|`"|$)")
 }
 
-# 确保测试服务器文件夹存在（从原始服务端复制）并含有 hoster_policy.txt（gamedir_for_configs: true）。
-function Initialize-TestServerDir([string]$ServerDir) {
+# 确保测试服务器文件夹存在（从 $Build 的原始服务端复制）并含有 hoster_policy.txt（gamedir_for_configs: true）。
+function Initialize-TestServerDir([string]$ServerDir, $Build) {
     $ServerDir = [IO.Path]::GetFullPath($ServerDir)
     if (-not (Test-Path -LiteralPath (Join-Path $ServerDir 'Carl Mod.exe'))) {
-        $source = Assert-PristineServer
+        $source = $Build.Dir
         if ([IO.Path]::GetFullPath($source).TrimEnd('\') -ieq $ServerDir.TrimEnd('\')) {
-            Fail '测试服务器文件夹不能和原始服务端是同一个文件夹。' '去掉 -ServerDir，使用默认的 .runtime\server-<端口>。'
+            Fail '测试服务器文件夹不能和原始服务端是同一个文件夹。' '去掉 -ServerDir，使用默认的 .runtime\server-<端口>-<版本>。'
         }
-        Write-Step "复制原始服务端到 $ServerDir（约 0.7 GB，只需一次）"
+        Write-Step "复制原始服务端 $($Build.Label) 到 $ServerDir（约 0.7 GB，只需一次）"
         robocopy $source $ServerDir /E /NFL /NDL /NJH /NJS /NP | Out-Null
         if ($LASTEXITCODE -ge 8) { Fail "复制服务端失败（robocopy 退出码 $LASTEXITCODE）。" '检查磁盘空间和文件夹权限后重试。' }
         $global:LASTEXITCODE = 0
@@ -147,6 +367,21 @@ function Initialize-TestServerDir([string]$ServerDir) {
         Fail "$policy 里没有 'gamedir_for_configs: true'，拒绝继续（否则配置会写进真正的 %APPDATA%）。" '在该文件中加入一行 gamedir_for_configs: true。'
     }
     return $ServerDir
+}
+
+# 脚本要操作的测试服务器：给了 -ServerVersion 时用该版本；否则该端口有运行中的测试服务器时用它；
+# 再否则用选出的版本（见 Select-PristineServer）。返回 Build（版本信息）、ServerDir 和 Running。
+function Resolve-TestServer([int]$Port, [string]$ServerVersion) {
+    if (-not $ServerVersion) {
+        $state = Get-RunningServer $Port
+        if ($state) {
+            $b = Get-ServerDirBuild $state.ServerDir
+            if (-not $b) { $b = Get-ServerBuildInfo ([byte[]]@()) }
+            return [pscustomobject]@{ Build = $b; ServerDir = $state.ServerDir; Running = $true }
+        }
+    }
+    $build = Select-PristineServer $ServerVersion
+    return [pscustomobject]@{ Build = $build; ServerDir = (Get-ServerDir $Port $build); Running = [bool](Get-RunningServer $Port) }
 }
 
 # LabAPI-Mobile 在测试服务器里的数据文件夹（插件放在其 plugins\global）。

@@ -11,6 +11,7 @@
 ## 功能
 
 - 一键准备：检查环境，解压服务端，自动下载安装 Android SDK 并创建模拟器。
+- 支持 Carl Mod 0.0.4 和 0.0.5 服务端，可以同时导入多个版本，自动识别版本（见“服务端版本”）。
 - 一键开始测试：启动本地服务器 → 启动模拟器 → 安装并启动客户端 → 自动点击菜单连接服务器。
 - 向服务器发送控制台命令（`forcestart`、`roundrestart`……），截图，测量客户端帧率。
 - 双客户端测试（两个模拟器同时连接）。
@@ -41,20 +42,42 @@
 
 ## 准备游戏文件
 
-把下面两个文件放进 `inputs` 文件夹（每种一个，文件名随意）：
+把下面的文件放进 `inputs` 文件夹（文件名随意）：
 
-1. Carl Mod **Windows 服务端** ZIP（压缩包里有 `Carl Mod.exe`）；
-2. Carl Mod **安卓客户端** APK（`.apk`，或 `.apk.1` 这类扩展名也可以）。
+1. Carl Mod **Windows 服务端** ZIP（压缩包里有 `Carl Mod.exe`）。可以放多个版本，每个版本一个；
+2. Carl Mod **安卓客户端** APK（`.apk`，或 `.apk.1` 这类扩展名也可以），只放一个。
+
+**客户端和服务端的版本必须相同**：版本不同时服务器会以版本不符拒绝连接，例如 0.0.4 的客户端不能加入 0.0.5 的服务器。
+`check.cmd`、`Show-Status.ps1` 和菜单会显示两者的版本，不同时给出提示。
 
 请从 Carl Mod 官方渠道获取，本项目不提供下载。文件放在别处，或已经有解压好的服务端文件夹时，
 可以在配置文件里指定路径（见“配置”）。
+
+## 服务端版本
+
+| 服务端 | 版本名（`ServerVersion`） | 本工具的测试情况 |
+| --- | --- | --- |
+| Carl Mod 0.0.5 | `0.0.5` | 只测试了服务端（导入、启动、命令、LabAPI-Mobile、辅助插件）；目前没有 0.0.5 的安卓客户端 |
+| Carl Mod 0.0.4，带死斗模块（`CarlModExtras.dll`） | `0.0.4-dm` | 服务端和模拟器里的 0.0.4 客户端 |
+| Carl Mod 0.0.4 官方服务端 | `0.0.4` | 服务端 |
+
+- 导入时从服务端的 `Assembly-CSharp.dll` 读取游戏版本，每个版本解压到自己的文件夹 `.runtime\server-original-<版本名>`。
+  0.0.5 的 ZIP 里有一层顶层文件夹 `Carl Mod Server - 0.0.5\`，`Managed` 里还有发行方留下的 `Assembly-CSharp.dll.pre_*.bak`，
+  这些都会自动处理（`.bak` 不解压）。
+- 测试服务器也按版本分开：`.runtime\server-<端口>-<版本名>`，例如 `server-7777-0.0.5`。切换版本不会混用配置和插件，
+  LabAPI-Mobile 和插件要给每个版本分别安装。
+- 使用哪个版本：配置 `ServerVersion`（或脚本参数 `-ServerVersion`，例如 `.\scripts\Start-All.ps1 -ServerVersion 0.0.5`）；
+  不设置时，只导入了一个版本就用它，导入了多个版本时用和客户端 APK 版本相同的那个（例如 0.0.4 的 APK 选 0.0.4 的服务端）。
+  选不出来时脚本会提示设置 `ServerVersion`。写 `0.0.4` 时优先匹配官方版，只导入了死斗模块版时也能匹配到它。
+- 菜单标题下、`check.cmd` 和 `Show-Status.ps1` 显示使用的服务端版本和 APK 的版本。
 
 ## 第一次使用
 
 1. 下载本工具（`git clone`，或在 GitHub 页面点 Code → Download ZIP 后解压）。
 2. 把服务端 ZIP 和 APK 放进 `inputs` 文件夹。
 3. 双击 **`check.cmd`** 检查环境，按每个 `[失败]` 项的“下一步”处理，直到全部通过。
-4. 双击 **`setup.cmd`**：解压服务端、下载 Android SDK、创建模拟器 `carlmod_api36`。第一次需要 10～20 分钟。
+4. 双击 **`setup.cmd`**：解压服务端（`inputs` 里的每个服务端 ZIP）、下载 Android SDK、创建模拟器 `carlmod_api36`。
+   第一次需要 10～20 分钟。
 5. 双击 **`start-all.cmd`**：
    - 第一次启动服务器时会先启动一次生成配置文件，再正式启动（共约 1.5 分钟）；
    - 模拟器冷启动约 1 分钟；
@@ -150,8 +173,9 @@ PowerShell 提示“禁止运行脚本”时，用 `.cmd` 文件，或这样运�
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
 | `Port` | `7777` | 测试服务器 UDP 端口；模拟器连接 `10.0.2.2:<端口>` |
-| `ServerZip` | inputs 里唯一的 `*.zip` | 服务端 ZIP |
-| `ServerFolder` | 空 | 已解压的服务端文件夹（含 `Carl Mod.exe`），设置后不需要 ZIP 和 Python；只复制，不修改 |
+| `ServerVersion` | 空（自动选择） | 使用的服务端版本：`0.0.5`、`0.0.4` 或 `0.0.4-dm`（见“服务端版本”） |
+| `ServerZip` | inputs 里的全部 `*.zip` | 服务端 ZIP，一个或多个（`@('a.zip', 'b.zip')`） |
+| `ServerFolder` | 空 | 已解压的服务端文件夹（含 `Carl Mod.exe`），作为一个可用版本，不需要 ZIP 和 Python；只复制，不修改 |
 | `Apk` | inputs 里唯一的 APK | 客户端 APK |
 | `AndroidSdk` | `%LOCALAPPDATA%\Android\Sdk` | Android SDK 位置（也读取 `ANDROID_SDK_ROOT` / `ANDROID_HOME`） |
 | `AvdName` / `Serial` | `carlmod_api36` / `emulator-5554` | 第一个模拟器 |
@@ -166,8 +190,8 @@ PowerShell 提示“禁止运行脚本”时，用 `.cmd` 文件，或这样运�
 | 位置 | 内容 |
 | --- | --- |
 | `inputs\` | 你放进来的服务端 ZIP 和 APK（Git 忽略） |
-| `.runtime\server-original\` | 解压出的原始服务端（只读使用，从不运行） |
-| `.runtime\server-<端口>\` | 测试服务器（从原始服务端复制）；配置、封禁、日志在其中的 `AppData\` |
+| `.runtime\server-original-<版本名>\` | 解压出的原始服务端，每个版本一个（只读使用，从不运行） |
+| `.runtime\server-<端口>-<版本名>\` | 测试服务器（从该版本的原始服务端复制）；配置、封禁、日志在其中的 `AppData\` |
 | `.runtime\apk\` | APK 副本（adb 只接受 `.apk` 扩展名） |
 | `.runtime\logs\` | 服务器日志 `server-<端口>-<时间>.log`、模拟器日志 `emulator-<端口>.log` |
 | `.runtime\captures\` | 截图和帧率结果 |
@@ -180,7 +204,7 @@ PowerShell 提示“禁止运行脚本”时，用 `.cmd` 文件，或这样运�
 
 - 服务端 ZIP、原始服务端文件夹和 APK 只读取和复制，从不修改；测试服务器总是单独的一份副本。
 - 启动前写入 `hoster_policy.txt`（`gamedir_for_configs: true`），服务器的配置、封禁列表和日志都放在
-  `.runtime\server-<端口>\AppData\`，不写进你电脑上真正的 `%APPDATA%\SCP Secret Laboratory`。
+  `.runtime\server-<端口>-<版本名>\AppData\`，不写进你电脑上真正的 `%APPDATA%\SCP Secret Laboratory`。
   **唯一的例外**是服务器的 player-prefs 文件 `%APPDATA%\SCP Secret Laboratory\registry.txt`：服务器在读取上述设置之前
   就确定了它的位置，每次回合重启会更新其中的 `LastRoundrestartTime` 和 `SrvSp_*` 键。除此之外不会写入那里。
 - 端口已被占用时拒绝启动服务器；同一端口已有本工具的服务器在运行时直接复用。
@@ -191,15 +215,17 @@ PowerShell 提示“禁止运行脚本”时，用 `.cmd` 文件，或这样运�
 
 ## 可选：LabAPI-Mobile 和测试辅助插件
 
-[LabAPI-Mobile](https://github.com/Michaelihc/labapimobile) 是移植到 Carl Mod 服务端的 LabAPI 插件框架。
-安装到测试服务器（需要先停止该服务器，会从 GitHub 下载最新发布版）：
+[LabAPI-Mobile](https://github.com/Michaelihc/labapimobile) 是移植到 Carl Mod 服务端的 LabAPI 插件框架，支持 0.0.4
+（两种服务端）和 0.0.5；0.0.5 需要 1.1.7-mobile.5 或更新版本。安装到当前使用的版本的测试服务器（需要先停止该服务器，
+会从 GitHub 下载最新发布版；安装器会显示它识别到的游戏版本）：
 
 ```powershell
 .\scripts\Stop-TestServer.ps1
 .\scripts\Install-LabApiMobile.ps1             # 无网络时：-Zip <下载好的 LabApiMobile-*.zip>
 ```
 
-插件 DLL 放进 `.runtime\server-<端口>\AppData\SCP Secret Laboratory\LabAPI-Mobile\plugins\global\`，重启服务器后加载。
+插件 DLL 放进 `.runtime\server-<端口>-<版本名>\AppData\SCP Secret Laboratory\LabAPI-Mobile\plugins\global\`，重启服务器后加载。
+换服务端版本后要再安装一次（每个版本的测试服务器是分开的）。
 
 **测试辅助插件 TestKitHelper**（源码在 [`plugin/TestKitHelper`](plugin/TestKitHelper)）：
 
@@ -207,15 +233,19 @@ PowerShell 提示“禁止运行脚本”时，用 `.cmd` 文件，或这样运�
 .\scripts\Install-HelperPlugin.ps1              # 有 .NET SDK 时从源码构建，否则下载发布页上的预编译 DLL
 ```
 
+同一个 DLL 支持 0.0.4 和 0.0.5。服务器运行时它装到正在运行的测试服务器，否则装到当前使用的版本的测试服务器。
+
 | 命令（控制台直接输入；游戏内控制台加 `/`） | 作用 |
 | --- | --- |
-| `testkit list` | 列出玩家：ID、昵称、角色、坐标、是否假人 |
+| `testkit list` | 列出玩家：ID、昵称、角色、坐标、设备 ID（0.0.5 显示为 `device=`，0.0.4 为 `userid=`）、是否假人 |
 | `testkit dummy <角色> [<玩家ID> \| <x> <y> <z>]` | 生成假人玩家：在角色出生点、指定玩家面前 1.5 米处（面向该玩家），或指定坐标 |
 | `testkit remove <玩家ID> \| all` | 移除一个或全部假人 |
 | `testkit tp <玩家ID> <目标玩家ID> \| <x> <y> <z>` | 把玩家传送到另一个玩家处或指定坐标 |
 
 角色名如 `ClassD`、`Scientist`、`FacilityGuard`、`NtfPrivate`、`ChaosRifleman`、`Scp173`、`Scp049`，也可以用数字。
-假人在服务器上运行，不需要第二台手机或模拟器；回合重启时自动移除。生成假人时服务器日志会出现几行
+假人在服务器上运行，不需要第二台手机或模拟器；回合重启时自动移除。0.0.5 用游戏自带的 `ServerDummy.Spawn` 生成假人
+（设备 ID 形如 `device_dummy_…@device`）；0.0.4 自带的版本在设置昵称时会出错，插件按同样的步骤自己生成。
+`testkit` 不带参数时会显示用的是哪一种。生成假人时服务器日志会出现几行
 `The referenced script on this Behaviour ... is missing!` 和 `Error during IP passthrough processing`，不影响使用。
 插件同时会把服务器控制台的输出写进服务器日志（每行以 `[console]` 开头），`Send-ServerCommand.ps1` 因此能显示命令结果。
 `testkit` 命令不检查权限，只应安装在本地测试服务器上。
@@ -285,9 +315,17 @@ Windows 会对后台窗口的进程做节能限速（EcoQoS），游戏帧率会
 查看 `.runtime\logs\emulator-<端口>.log` 和 `.log.err`。常见原因：WHPX 未启用（运行 `check.cmd`）、磁盘空间不足、
 路径含中文、显卡驱动过旧。
 
-**服务端更新了**
-把新的 ZIP 放进 `inputs`（删掉旧的），运行 `.\scripts\Import-Server.ps1 -Force`。已有的测试服务器 `.runtime\server-<端口>\`
-仍是旧版本：停止服务器后删除该文件夹，下次启动会重新复制（其中的配置、插件和 RA 授权也会一起删除）。
+**客户端连不上服务器，提示版本不符**
+客户端和服务端版本不同，服务器拒绝了连接（服务器日志里没有记录）。运行 `check.cmd` 查看两者的版本，然后换用同版本的 APK，或用 `ServerVersion` 选择同版本的服务端。
+
+**服务端出了新版本**
+把新版本的 ZIP 放进 `inputs`，运行 `.\scripts\Import-Server.ps1`（或 `setup.cmd`），它会导入成新的版本，旧版本保留。
+同一版本的 ZIP 更新了时，删掉旧 ZIP，运行 `.\scripts\Import-Server.ps1 -Force`；该版本已有的测试服务器
+`.runtime\server-<端口>-<版本名>\` 仍是旧文件：停止服务器后删除该文件夹，下次启动会重新复制（其中的配置、插件和 RA 授权也会一起删除）。
+
+**只用假人测试时命令很久才有结果**
+服务器上没有真实玩家时，约 5 秒后进入空闲模式（日志里有 `Server has entered the idle mode`），每秒只运行一帧，
+`Send-ServerCommand.ps1` 可能来不及显示结果。加 `-WaitSec 5`，或在配置的 `ConfigOverrides` 里加 `idle_mode_enabled = 'false'`。
 
 **换新版本 APK / 清除游戏数据**
 `.\scripts\Install-Client.ps1 -Apk <新 APK>`；`-Reinstall` 会先卸载（清除游戏数据）再安装。

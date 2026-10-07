@@ -21,6 +21,23 @@ function Invoke-Action([scriptblock]$Action) {
     $null = Read-Host '按回车返回菜单'
 }
 
+# 菜单标题下的一行：使用的服务端版本和客户端 APK 的版本。
+function Get-VersionLine {
+    $server = '未导入'
+    $serverVersion = $null
+    try {
+        $all = @(Get-PristineServers)
+        if ($all.Count -gt 0) {
+            try { $sel = Select-PristineServer; $server = $sel.Label; $serverVersion = $sel.Version }
+            catch { $server = "未选择（已导入 $(($all | ForEach-Object Label) -join '、')，在 testkit.config.psd1 里设置 ServerVersion）" }
+        }
+    } catch { }
+    $apk = Get-ApkInfo
+    $client = if ($apk -and $apk.Version) { $apk.Version } elseif ($apk) { '版本未知' } else { '未找到' }
+    $warn = ($serverVersion -and $apk -and $apk.Version -and $apk.Version -ne $serverVersion)
+    return [pscustomobject]@{ Text = "   服务端 $server    客户端 APK $client"; Warn = $warn }
+}
+
 function Open-Folder([string]$Path) {
     New-Item -ItemType Directory -Force $Path | Out-Null
     Invoke-Item -LiteralPath $Path
@@ -33,6 +50,9 @@ while ($true) {
     Write-Host '   Carl Mod 本地测试工具（服务器 + 安卓模拟器）' -ForegroundColor Cyan
     Write-Host '==============================================' -ForegroundColor Cyan
     Write-Host "   端口 $($cfg.Port)    模拟器 $($cfg.Serial)（$($cfg.AvdName)）" -ForegroundColor DarkGray
+    $versions = Get-VersionLine
+    Write-Host $versions.Text -ForegroundColor DarkGray
+    if ($versions.Warn) { Write-Host '   [提示] 客户端和服务端版本不同，客户端无法加入（服务器会以版本不符拒绝连接）。' -ForegroundColor Yellow }
     Write-Host ''
     Write-Host '  准备'
     Write-Host '    1  检查环境'

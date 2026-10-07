@@ -2,9 +2,10 @@
 
 用法: python scripts/extract-server.py --zip <服务端.zip> <目标文件夹>
 
-- 自动找到包含 "Carl Mod.exe" 的文件夹，目标文件夹里直接得到 "Carl Mod.exe" 和 "Carl Mod_Data"。
-- 未标记 UTF-8 的文件名按 GBK 解码（国内打包工具常见）。
-- 跳过 mono.msi 和 *.bak 备份文件。
+- 自动找到包含 "Carl Mod.exe" 的文件夹（例如顶层的 "Carl Mod Server - 0.0.5"），目标文件夹里直接得到
+  "Carl Mod.exe" 和 "Carl Mod_Data"。
+- 条目名里的反斜杠按文件夹分隔符处理；未标记 UTF-8 的文件名按 GBK 解码（国内打包工具常见）。
+- 跳过 mono.msi 和 *.bak 备份文件（例如 Assembly-CSharp.dll.pre_*.bak）。
 """
 import argparse
 import sys

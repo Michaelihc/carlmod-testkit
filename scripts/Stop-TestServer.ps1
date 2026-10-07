@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 function Stop-One([int]$P) {
     $file = Get-ServerStateFile $P
     if (-not (Test-Path -LiteralPath $file)) { Write-Host "端口 $P 没有本工具启动的服务器记录，无需停止。"; return }
-    $state = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+    $state = Read-StateFile $file
     $procId = [int]$state.Pid
     $info = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
     if (-not $info) {

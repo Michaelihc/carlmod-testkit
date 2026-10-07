@@ -1,6 +1,7 @@
 ﻿<#
 .SYNOPSIS
-  检查运行环境：系统、虚拟化（WHPX）、Java、Python、内存、磁盘空间、输入文件、Android SDK、端口。
+  检查运行环境：系统、虚拟化（WHPX）、Java、Python、内存、磁盘空间、输入文件（含服务端和客户端版本）、
+  Android SDK、端口。
 
 .DESCRIPTION
   每项显示 [通过] / [警告] / [失败] 和下一步该做什么。只读检查，不修改任何东西。
@@ -77,32 +78,69 @@ elseif ($sdkReady) { Add-Result 'Java 17+' 'WARN' $(if ($javaExe) { "版本过�
 else { Add-Result 'Java 17+' 'FAIL' $(if ($javaExe) { "版本过低：$javaText" } else { '未找到 java（PATH 和 JAVA_HOME 中都没有）' }) $javaNext }
 
 # ---- 服务端与 Python
-$pristine = Get-PristineServerDir
-$serverImported = Test-Path -LiteralPath (Join-Path $pristine 'Carl Mod.exe')
-$python = Get-PythonCommand
-$zip = $null; $zipError = $null
-try { $zip = Find-ServerZip } catch { $zipError = $_.Exception.Message }
-if ($serverImported) {
-    Add-Result '服务端' 'OK' "已导入：$pristine" ''
+$servers = @(); $zips = @(); $zipError = $null
+try { $servers = @(Get-PristineServers) } catch { }
+try { $zips = @(Find-ServerZips) } catch { $zipError = $_.Exception.Message }
+$pending = @()   # 还没有导入的 ZIP
+foreach ($z in $zips) {
+    $b = $null
+    try { $b = Get-ZipServerBuild $z } catch { }
+    if (-not $b) { Add-Result '服务端 ZIP' 'WARN' "$(Split-Path -Leaf $z) 不是 Carl Mod 的 Windows 服务端（里面没有 Carl Mod.exe）" '把它移出 inputs 文件夹。'; continue }
+    if (-not ($servers | Where-Object { $_.Key -eq $b.Key })) { $pending += [pscustomobject]@{ Name = (Split-Path -Leaf $z); Build = $b } }
+}
+$pendingText = ($pending | ForEach-Object { "$($_.Name)（$($_.Build.Label)）" }) -join '、'
+if ($servers.Count -gt 0) {
+    Add-Result '服务端' 'OK' "已导入：$(($servers | ForEach-Object Label) -join '、')" ''
+    if ($pending.Count -gt 0) { Add-Result '服务端 ZIP' 'INFO' "未导入：$pendingText" '运行 setup.cmd（或 scripts\Import-Server.ps1）解压。' }
 } elseif ($cfg.ServerFolder) {
     Add-Result '服务端' 'FAIL' "ServerFolder 里没有 Carl Mod.exe：$($cfg.ServerFolder)" '把 ServerFolder 改成包含 Carl Mod.exe 的文件夹。'
 } elseif ($zipError) {
     Add-Result '服务端' 'FAIL' $zipError ''
-} elseif ($zip) {
-    Add-Result '服务端' 'OK' "找到 ZIP：$(Split-Path -Leaf $zip)（运行 setup.cmd 时解压）" ''
+} elseif ($pending.Count -gt 0) {
+    Add-Result '服务端' 'OK' "找到 ZIP：$pendingText（运行 setup.cmd 时解压）" ''
 } else {
     Add-Result '服务端' 'FAIL' 'inputs 文件夹里没有服务端 ZIP' '从 Carl Mod 官方渠道获取 Windows 服务端 ZIP，放进 inputs 文件夹。'
 }
+$python = Get-PythonCommand
 if ($python) { Add-Result 'Python 3.8+' 'OK' ($python -join ' ') '' }
-elseif ($serverImported -or $cfg.ServerFolder) { Add-Result 'Python 3.8+' 'WARN' '未找到（服务端已导入，暂时不需要）' '以后要导入新的服务端 ZIP 时，从 https://www.python.org 安装 Python 3。' }
+elseif ($pending.Count -eq 0 -and ($servers.Count -gt 0 -or $cfg.ServerFolder)) { Add-Result 'Python 3.8+' 'WARN' '未找到（服务端已导入，暂时不需要）' '以后要导入新的服务端 ZIP 时，从 https://www.python.org 安装 Python 3。' }
 else { Add-Result 'Python 3.8+' 'FAIL' '未找到（解压服务端 ZIP 需要它）' '从 https://www.python.org 安装 Python 3，安装时勾选 “Add python.exe to PATH”，然后重新打开窗口。' }
 
 # ---- APK
+$apkVersion = $null
 try {
     $apk = Find-ApkFile
-    if ($apk) { Add-Result '客户端 APK' 'OK' "$(Split-Path -Leaf $apk)（$([Math]::Round((Get-Item -LiteralPath $apk).Length / 1GB, 2)) GB）" '' }
+    if ($apk) {
+        $apkVersion = Get-ApkVersion $apk
+        $v = if ($apkVersion) { "版本 $apkVersion，" } else { '' }
+        Add-Result '客户端 APK' 'OK' "$(Split-Path -Leaf $apk)（$v$([Math]::Round((Get-Item -LiteralPath $apk).Length / 1GB, 2)) GB）" ''
+    }
     else { Add-Result '客户端 APK' 'FAIL' 'inputs 文件夹里没有 APK' '从 Carl Mod 官方渠道获取安卓客户端 APK，放进 inputs 文件夹。' }
 } catch { Add-Result '客户端 APK' 'FAIL' $_.Exception.Message '' }
+
+# ---- 客户端和服务端版本
+$verItem = '客户端与服务端版本'
+if ($servers.Count -gt 0) {
+    $sel = $null
+    try { $sel = Select-PristineServer } catch {
+        $msg = $_.Exception.Message -split "`n"
+        Add-Result $verItem 'FAIL' $msg[0] ($msg[1] -replace '^下一步：', '')
+    }
+    if ($sel) {
+        $how = if ($cfg.ServerVersion) { '（配置 ServerVersion）' } elseif ($servers.Count -gt 1) { '（与 APK 版本相同）' } else { '' }
+        if (-not $apkVersion -or -not $sel.Version) {
+            Add-Result $verItem 'INFO' "测试服务器使用 $($sel.Label)$how；读不到 APK 的版本" $script:VersionMatchNote
+        } elseif ($apkVersion -eq $sel.Version) {
+            Add-Result $verItem 'OK' "都是 $apkVersion（测试服务器使用 $($sel.Label)$how）" ''
+        } else {
+            Add-Result $verItem 'WARN' "客户端 APK 是 $apkVersion，测试服务器使用 $($sel.Label)$how" "$($script:VersionMatchNote)换用同版本的 APK，或导入并选择 $apkVersion 的服务端（配置 ServerVersion）。"
+        }
+    }
+} elseif ($pending.Count -gt 0 -and $apkVersion) {
+    if (-not ($pending | Where-Object { $_.Build.Version -eq $apkVersion })) {
+        Add-Result $verItem 'WARN' "客户端 APK 是 $apkVersion，服务端 ZIP 是 $(($pending | ForEach-Object { $_.Build.Label }) -join '、')" "$script:VersionMatchNote"
+    }
+}
 
 # ---- 硬件
 $ramGB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
@@ -117,7 +155,7 @@ $kitFree = Get-FreeGB $script:KitRoot
 $kitNeed = 5
 if ($null -eq $kitFree) { Add-Result '磁盘（本工具所在盘）' 'WARN' '无法读取剩余空间' '' }
 elseif ($kitFree -ge $kitNeed) { Add-Result '磁盘（本工具所在盘）' 'OK' "剩余 $kitFree GB" '' }
-else { Add-Result '磁盘（本工具所在盘）' 'FAIL' "剩余 $kitFree GB" "需要约 $kitNeed GB（原始服务端 0.7 GB + 每个测试服务器 0.7 GB + APK 副本约 2 GB + 日志截图）。清理空间或把本工具移到别的盘。" }
+else { Add-Result '磁盘（本工具所在盘）' 'FAIL' "剩余 $kitFree GB" "需要约 $kitNeed GB（每个版本的原始服务端 0.7 GB + 每个测试服务器 0.7 GB + APK 副本约 2 GB + 日志截图）。清理空间或把本工具移到别的盘。" }
 $avdHome = Get-AvdHome
 $avdExists = Test-Path (Join-Path $avdHome "$($cfg.AvdName).avd\config.ini")
 $sdkNeed = 0

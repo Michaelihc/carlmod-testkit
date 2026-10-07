@@ -17,7 +17,7 @@ namespace CarlModTestKit
     {
         // No angle brackets: the server console treats <word> as rich-text tags.
         private const string Usage =
-            "testkit list                         list players (id, nick, role, position)\n" +
+            "testkit list                         list players (id, nick, role, position, user/device ID)\n" +
             "testkit dummy ROLE [ID | X Y Z]      spawn a dummy at the role spawnpoint, in front of player ID, or at X Y Z\n" +
             "testkit remove ID|all                remove one dummy or all dummies\n" +
             "testkit tp ID TARGET_ID|X Y Z        move a player to another player or to X Y Z\n" +
@@ -46,7 +46,7 @@ namespace CarlModTestKit
                     case "tp":
                         return Teleport(arguments, out response);
                     default:
-                        response = Usage;
+                        response = Usage + "\ndummy players: " + DummyFactory.SpawnMode;
                         return sub == "help";
                 }
             }
@@ -69,6 +69,7 @@ namespace CarlModTestKit
                     .Append(" nick=").Append(hub.nicknameSync.MyNick)
                     .Append(" role=").Append(hub.roleManager.CurrentRole.RoleTypeId)
                     .Append(" pos=").Append(FormatPosition(hub))
+                    .Append(DummyFactory.DeviceIds ? " device=" : " userid=").Append(hub.characterClassManager.UserId)
                     .Append(DummyFactory.IsDummy(hub) ? " (dummy)" : string.Empty);
             }
 

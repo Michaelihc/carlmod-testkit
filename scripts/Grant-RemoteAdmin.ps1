@@ -3,7 +3,7 @@
   给模拟器里的客户端授予远程管理（RA）权限，使游戏内 控制台 里以 / 开头的 RA 命令生效。
 
 .DESCRIPTION
-  只修改测试服务器 .runtime\server-<端口>\AppData\config\<端口>\config_remoteadmin.txt 的 Members 列表。
+  只修改测试服务器 .runtime\server-<端口>-<版本>\AppData\config\<端口>\config_remoteadmin.txt 的 Members 列表。
   不指定 -UserId 时，从当前服务器日志里读取已连接客户端的设备 ID（形如 device_xxxx@device）。
   每个 AVD 的设备 ID 不同，第二个模拟器需要单独授权。修改后重启服务器才生效（加 -Restart 自动重启；
   客户端会自动重新连接）。
@@ -25,7 +25,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 if (-not $Port) { $Port = [int](Get-KitConfig).Port }
 
-$serverDir = Get-ServerDir $Port
+# 该端口正在运行的测试服务器；没有运行时用配置 ServerVersion 选出的版本。
+$serverDir = (Resolve-TestServer $Port).ServerDir
 $file = Join-Path $serverDir "AppData\config\$Port\config_remoteadmin.txt"
 if (-not (Test-Path -LiteralPath $file)) { Fail "找不到 $file。" "先启动一次端口 $Port 的测试服务器（start-all.cmd）。" }
 
@@ -63,9 +64,11 @@ if ($added.Count -gt 0) {
 }
 
 if ($Restart) {
-    if (Get-RunningServer $Port) {
+    $running = Get-RunningServer $Port
+    if ($running) {
         & (Join-Path $PSScriptRoot 'Stop-TestServer.ps1') -Port $Port
-        & (Join-Path $PSScriptRoot 'Start-TestServer.ps1') -Port $Port
+        # 用同一个测试服务器文件夹重新启动（同一服务端版本）。
+        & (Join-Path $PSScriptRoot 'Start-TestServer.ps1') -Port $Port -ServerDir $running.ServerDir
         Write-Note '客户端会自动重新连接；若没有，运行菜单里的“重新连接客户端”。'
     }
 } elseif ($added.Count -gt 0) {

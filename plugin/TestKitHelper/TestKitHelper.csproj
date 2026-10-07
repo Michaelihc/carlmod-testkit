@@ -2,7 +2,7 @@
   <!--
     TestKitHelper：本地测试辅助插件（LabAPI-Mobile 插件）。只用于本地测试服务器。
     推荐用 scripts\Install-HelperPlugin.ps1 构建和安装，它会自动传入下面两个路径：
-      CarlManaged  Carl Mod 服务端的 "Carl Mod_Data\Managed" 文件夹（默认 .runtime\server-original 中的）
+      CarlManaged  Carl Mod 服务端的 "Carl Mod_Data\Managed" 文件夹（0.0.4 或 0.0.5 均可，构建结果两者通用）
       LabApiDll    LabAPI-Mobile 的 LabApi.dll
   -->
   <PropertyGroup>
@@ -10,14 +10,14 @@
     <OutputType>Library</OutputType>
     <AssemblyName>TestKitHelper</AssemblyName>
     <RootNamespace>CarlModTestKit</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
     <Deterministic>true</Deterministic>
     <DebugType>none</DebugType>
+    <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <CarlManaged Condition="'$(CarlManaged)' == ''">$(MSBuildThisFileDirectory)..\..\.runtime\server-original\Carl Mod_Data\Managed</CarlManaged>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,7 +33,7 @@
   </ItemGroup>
 
   <Target Name="CheckReferencePaths" BeforeTargets="ResolveAssemblyReferences">
-    <Error Condition="!Exists('$(CarlManaged)\Assembly-CSharp.dll')" Text="找不到 $(CarlManaged)\Assembly-CSharp.dll。先导入服务端（setup.cmd），或用 -p:CarlManaged=&lt;服务端\Carl Mod_Data\Managed&gt; 指定。" />
+    <Error Condition="!Exists('$(CarlManaged)\Assembly-CSharp.dll')" Text="找不到 $(CarlManaged)\Assembly-CSharp.dll。用 -p:CarlManaged=&lt;服务端\Carl Mod_Data\Managed&gt; 指定（scripts\Install-HelperPlugin.ps1 会自动传入）。" />
     <Error Condition="'$(LabApiDll)' == '' Or !Exists('$(LabApiDll)')" Text="找不到 LabApi.dll。先运行 scripts\Install-LabApiMobile.ps1，或用 -p:LabApiDll=&lt;LabApi.dll 路径&gt; 指定。" />
   </Target>
 </Project>
